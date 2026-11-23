@@ -1,0 +1,13 @@
+# Hasil makepkg
+src/
+pkg/
+*.pkg.tar.*
+*.tgz
+
+# Hasil workflow build
+dist/
+repo/
+.build.sh
+.build-user.sh
+npm.json
+upstream.tgz

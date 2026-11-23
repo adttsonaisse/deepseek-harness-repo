@@ -1,0 +1,211 @@
+name: Build & publish deepseek-harness-repo
+
+on:
+  schedule:
+    - cron: '37 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deepseek-harness-repo
+  cancel-in-progress: false
+
+env:
+  NPM_PKG: '@deepseek-ai/dsh'
+  NPM_PKG_ENC: '@deepseek-ai%2Fdsh'
+  REPO_NAME: deepseek-harness-repo
+  RELEASE_TAG: repo
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Cek versi npm terbaru
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Repo upstream tidak merilis asset .deb; satu-satunya kanal resmi
+          # adalah npm. dist-tag "latest" = versi yang dipakai npx @deepseek-ai/dsh.
+          curl -fsSL --retry 3 "https://registry.npmjs.org/${NPM_PKG_ENC}" > npm.json
+
+          version=$(jq -r '."dist-tags".latest' npm.json)
+          if [[ -z "$version" || "$version" == "null" ]]; then
+            echo "::error::Gagal membaca dist-tag latest dari npm"
+            exit 1
+          fi
+
+          tarball=$(jq -r --arg v "$version" '.versions[$v].dist.tarball // empty' npm.json)
+          if [[ -z "$tarball" ]]; then
+            echo "::error::Tarball npm untuk versi ${version} tidak ditemukan"
+            exit 1
+          fi
+
+          curl -fsSL --retry 3 -o upstream.tgz "$tarball"
+          sha=$(sha256sum upstream.tgz | awk '{print $1}')
+
+          # pkgver Arch tidak membolehkan '-': 0.2.2-rc.5 -> 0.2.2.rc5
+          arch_version=$(printf '%s' "$version" \
+            | sed -E 's/-(alpha|beta|rc)\./.\1/' \
+            | sed -E 's/([a-z]+)\.([0-9]+)$/\1\2/')
+
+          current=$(sed -n 's/^pkgver=//p' PKGBUILD | head -n1)
+
+          published=false
+          if assets=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' 2>/dev/null); then
+            if printf '%s\n' "$assets" | grep -q "^deepseek-harness-bin-${current}-"; then
+              published=true
+            fi
+          fi
+
+          {
+            echo "version=${version}"
+            echo "arch_version=${arch_version}"
+            echo "tarball=${tarball}"
+            echo "sha=${sha}"
+            echo "current=${current}"
+          } >> "$GITHUB_OUTPUT"
+
+          if [[ "$arch_version" == "$current" && "$published" == "true" ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Sudah up to date (${version}) dan paket sudah terbit. Skip."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Perlu build: PKGBUILD=${current}, npm=${version}, published=${published}"
+          fi
+
+      - name: Update PKGBUILD (pkgver, source, sha256sums, pkgrel)
+        if: steps.check.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
+          ARCH_VERSION: ${{ steps.check.outputs.arch_version }}
+          TARBALL: ${{ steps.check.outputs.tarball }}
+          SHA: ${{ steps.check.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          sed -i "s/^pkgver=.*/pkgver=${ARCH_VERSION}/" PKGBUILD
+          sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+          sed -i "s|^source=(.*|source=(\"dsh-\${_npmver}.tgz::${TARBALL}\")|" PKGBUILD
+          sed -i "s/^sha256sums=(.*/sha256sums=('${SHA}')/" PKGBUILD
+
+          grep -E '^(pkgver|pkgrel|_npmver|source|sha256sums)=' PKGBUILD
+
+      - name: Build di container archlinux:base-devel (user non-root) + repo-add
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+
+          cat > .build.sh <<'ROOT_SCRIPT'
+          set -euo pipefail
+          pacman -Syu --noconfirm --needed ca-certificates fakeroot nodejs npm
+          getent group "$HOST_GID" >/dev/null || groupadd -g "$HOST_GID" builder
+          id builder >/dev/null 2>&1 || useradd -m -u "$HOST_UID" -g "$HOST_GID" builder
+          chown -R "$HOST_UID:$HOST_GID" /work
+          su builder -s /bin/bash -c 'export HOME=/home/builder; bash /work/.build-user.sh'
+          ROOT_SCRIPT
+
+          cat > .build-user.sh <<'USER_SCRIPT'
+          set -euo pipefail
+          cd /work
+
+          # --nodeps: nodejs/npm sudah dipasang di container; dependency runtime
+          # tidak perlu lengkap untuk sekadar membungkus paket npm.
+          makepkg --noconfirm --clean --nodeps
+
+          mkdir -p repo
+          mv ./*.pkg.tar.zst repo/
+          cd repo
+
+          # Membuat <repo>.db.tar.gz dan <repo>.files.tar.gz sekaligus
+          repo-add "$REPO_NAME.db.tar.gz" ./*.pkg.tar.zst
+
+          # GitHub Releases tidak menyimpan symlink, jadi timpa .db dan .files
+          # dengan salinan isi file .tar.gz masing-masing.
+          for link in "$REPO_NAME.db" "$REPO_NAME.files"; do
+            if [ -L "$link" ]; then
+              cp -L "$link" "$link.tmp"
+              mv -f "$link.tmp" "$link"
+            fi
+          done
+
+          cp -L ./*.pkg.tar.zst ../dist/
+          cp -L "$REPO_NAME.db" "$REPO_NAME.db.tar.gz" \
+                "$REPO_NAME.files" "$REPO_NAME.files.tar.gz" ../dist/
+          USER_SCRIPT
+
+          chmod +x .build.sh .build-user.sh
+
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/work" \
+            -w /work \
+            -e HOST_UID="$(id -u)" \
+            -e HOST_GID="$(id -g)" \
+            -e REPO_NAME="$REPO_NAME" \
+            archlinux:base-devel \
+            bash /work/.build.sh
+
+          sudo chown -R "$(id -u):$(id -g)" dist repo 2>/dev/null || true
+          ls -l dist
+
+      - name: Commit PKGBUILD ke branch main
+        if: steps.check.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add PKGBUILD
+
+          if git diff --cached --quiet; then
+            echo 'PKGBUILD tidak berubah, tidak ada commit.'
+          else
+            git commit -m "chore: bump deepseek-harness-bin to ${VERSION}"
+            git push origin HEAD:main
+          fi
+
+      - name: Upload ke release "repo" (tag tetap)
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --title "$RELEASE_TAG" \
+              --target main \
+              --notes "Database dan paket pacman untuk ${REPO_NAME}. Tag ini sengaja tetap agar URL di pacman.conf tidak berubah."
+          fi
+
+          old_assets=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' \
+            | grep -E '\.pkg\.tar\.zst$' || true)
+          if [[ -n "$old_assets" ]]; then
+            while IFS= read -r asset; do
+              echo "Menghapus asset lama: ${asset}"
+              gh release delete-asset "$RELEASE_TAG" "$asset" -y
+            done <<< "$old_assets"
+          fi
+
+          gh release upload "$RELEASE_TAG" \
+            dist/*.pkg.tar.zst \
+            "dist/${REPO_NAME}.db" \
+            "dist/${REPO_NAME}.db.tar.gz" \
+            "dist/${REPO_NAME}.files" \
+            "dist/${REPO_NAME}.files.tar.gz" \
+            --clobber
+
+          echo "Selesai. https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}"
