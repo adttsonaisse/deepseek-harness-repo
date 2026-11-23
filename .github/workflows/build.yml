@@ -13,8 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  NPM_PKG: '@deepseek-ai/dsh'
-  NPM_PKG_ENC: '@deepseek-ai%2Fdsh'
+  UPSTREAM: dsh-tauri/deepseek-harness-desktop
   REPO_NAME: deepseek-harness-repo
   RELEASE_TAG: repo
 
@@ -27,78 +26,75 @@ jobs:
         with:
           ref: main
 
-      - name: Cek versi npm terbaru
+      - name: Cek versi rilis upstream
         id: check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
-          # Repo upstream tidak merilis asset .deb; satu-satunya kanal resmi
-          # adalah npm. dist-tag "latest" = versi yang dipakai npx @deepseek-ai/dsh.
-          curl -fsSL --retry 3 "https://registry.npmjs.org/${NPM_PKG_ENC}" > npm.json
+          gh api "repos/${UPSTREAM}/releases/latest" > latest.json
 
-          version=$(jq -r '."dist-tags".latest' npm.json)
-          if [[ -z "$version" || "$version" == "null" ]]; then
-            echo "::error::Gagal membaca dist-tag latest dari npm"
+          tag=$(jq -r '.tag_name' latest.json)
+          deb=$(jq -r '[.assets[].name | select(test("^Deepseek[.]Harness[.]Desktop_.*_amd64[.]deb$"))] | first // empty' latest.json)
+          if [[ -z "$deb" ]]; then
+            echo "::error::Tidak ada asset *amd64.deb di rilis ${tag}"
             exit 1
           fi
 
-          tarball=$(jq -r --arg v "$version" '.versions[$v].dist.tarball // empty' npm.json)
-          if [[ -z "$tarball" ]]; then
-            echo "::error::Tarball npm untuk versi ${version} tidak ditemukan"
-            exit 1
+          version=$(printf '%s' "$deb" | sed -E 's/^Deepseek[.]Harness[.]Desktop_(.*)_amd64[.]deb$/\1/')
+          url="https://github.com/${UPSTREAM}/releases/download/${tag}/${deb}"
+
+          digest=$(jq -r --arg n "$deb" '.assets[] | select(.name == $n) | .digest // empty' latest.json)
+          if [[ -n "$digest" ]]; then
+            sha="${digest#sha256:}"
+          else
+            echo 'digest tidak tersedia, mengunduh .deb untuk dihash'
+            curl -fsSL --retry 3 -o upstream.deb "$url"
+            sha=$(sha256sum upstream.deb | awk '{print $1}')
           fi
-
-          curl -fsSL --retry 3 -o upstream.tgz "$tarball"
-          sha=$(sha256sum upstream.tgz | awk '{print $1}')
-
-          # pkgver Arch tidak membolehkan '-': 0.2.2-rc.5 -> 0.2.2.rc5
-          arch_version=$(printf '%s' "$version" \
-            | sed -E 's/-(alpha|beta|rc)\./.\1/' \
-            | sed -E 's/([a-z]+)\.([0-9]+)$/\1\2/')
 
           current=$(sed -n 's/^pkgver=//p' PKGBUILD | head -n1)
 
+          # Self-healing: kalau PKGBUILD sudah versi terbaru tetapi asset belum
+          # pernah terbit di release "repo", tetap lanjut build.
           published=false
           if assets=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' 2>/dev/null); then
-            if printf '%s\n' "$assets" | grep -q "^deepseek-harness-bin-${current}-"; then
+            if printf '%s\n' "$assets" | grep -q "^deepseek-harness-desktop-bin-${current}-"; then
               published=true
             fi
           fi
 
           {
             echo "version=${version}"
-            echo "arch_version=${arch_version}"
-            echo "tarball=${tarball}"
+            echo "url=${url}"
             echo "sha=${sha}"
             echo "current=${current}"
           } >> "$GITHUB_OUTPUT"
 
-          if [[ "$arch_version" == "$current" && "$published" == "true" ]]; then
+          if [[ "$version" == "$current" && "$published" == "true" ]]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "Sudah up to date (${version}) dan paket sudah terbit. Skip."
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "Perlu build: PKGBUILD=${current}, npm=${version}, published=${published}"
+            echo "Perlu build: PKGBUILD=${current}, upstream=${version}, published=${published}"
           fi
 
       - name: Update PKGBUILD (pkgver, source, sha256sums, pkgrel)
         if: steps.check.outputs.changed == 'true'
         env:
           VERSION: ${{ steps.check.outputs.version }}
-          ARCH_VERSION: ${{ steps.check.outputs.arch_version }}
-          TARBALL: ${{ steps.check.outputs.tarball }}
+          URL: ${{ steps.check.outputs.url }}
           SHA: ${{ steps.check.outputs.sha }}
         run: |
           set -euo pipefail
 
-          sed -i "s/^pkgver=.*/pkgver=${ARCH_VERSION}/" PKGBUILD
+          sed -i "s/^pkgver=.*/pkgver=${VERSION}/" PKGBUILD
           sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
-          sed -i "s|^source=(.*|source=(\"dsh-\${_npmver}.tgz::${TARBALL}\")|" PKGBUILD
+          sed -i "s|^source=(.*|source=(\"Deepseek.Harness.Desktop-${VERSION}_amd64.deb::${URL}\")|" PKGBUILD
           sed -i "s/^sha256sums=(.*/sha256sums=('${SHA}')/" PKGBUILD
 
-          grep -E '^(pkgver|pkgrel|_npmver|source|sha256sums)=' PKGBUILD
+          grep -E '^(pkgver|pkgrel|source|sha256sums)=' PKGBUILD
 
       - name: Build di container archlinux:base-devel (user non-root) + repo-add
         if: steps.check.outputs.changed == 'true'
@@ -109,7 +105,7 @@ jobs:
 
           cat > .build.sh <<'ROOT_SCRIPT'
           set -euo pipefail
-          pacman -Syu --noconfirm --needed ca-certificates fakeroot nodejs npm
+          pacman -Syu --noconfirm --needed ca-certificates fakeroot
           getent group "$HOST_GID" >/dev/null || groupadd -g "$HOST_GID" builder
           id builder >/dev/null 2>&1 || useradd -m -u "$HOST_UID" -g "$HOST_GID" builder
           chown -R "$HOST_UID:$HOST_GID" /work
@@ -120,8 +116,8 @@ jobs:
           set -euo pipefail
           cd /work
 
-          # --nodeps: nodejs/npm sudah dipasang di container; dependency runtime
-          # tidak perlu lengkap untuk sekadar membungkus paket npm.
+          # --nodeps: dependency runtime tidak perlu terpasang di container
+          # untuk sekadar membongkar dan mengemas ulang .deb.
           makepkg --noconfirm --clean --nodeps
 
           mkdir -p repo
@@ -173,7 +169,7 @@ jobs:
           if git diff --cached --quiet; then
             echo 'PKGBUILD tidak berubah, tidak ada commit.'
           else
-            git commit -m "chore: bump deepseek-harness-bin to ${VERSION}"
+            git commit -m "chore: bump deepseek-harness-desktop-bin to ${VERSION}"
             git push origin HEAD:main
           fi
 

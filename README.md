@@ -1,23 +1,22 @@
 # deepseek-harness-repo
 
-Repository pacman untuk Arch Linux yang berisi satu paket, `deepseek-harness-bin`
-(perintah CLI `dsh`).
+Repository pacman untuk Arch Linux yang berisi satu paket,
+`deepseek-harness-desktop-bin` — versi **desktop** dari DeepSeek Harness.
 
-Paket ini dibuat dari tarball npm resmi [`@deepseek-ai/dsh`](https://www.npmjs.com/package/@deepseek-ai/dsh),
-yaitu kanal distribusi [`deepseek-ai/deepseek-harness`](https://github.com/deepseek-ai/deepseek-harness).
-Repo upstream **tidak merilis file `.deb`** — rilisnya hanya berupa tag tanpa asset,
-jadi pengemasannya mengikuti cara distribusi aslinya lewat npm.
+Paket ini dibuat dengan mengemas ulang file `.deb` resmi dari
+[dsh-tauri/deepseek-harness-desktop](https://github.com/dsh-tauri/deepseek-harness-desktop)
+menjadi `.pkg.tar.zst`. Tidak ada kompilasi dari source dan tidak memakai
+`debtap` — cukup ekstrak `data.tar.*` memakai `bsdtar`.
 
 Satu workflow GitHub Actions jalan tiap hari (dan bisa dipicu manual), lalu:
 
-1. baca dist-tag `latest` dari registry npm;
-2. kalau versinya berubah, normalisasi versi ke format `pkgver` Arch, lalu perbarui
-   `pkgver`, `source`, dan `sha256sums` di PKGBUILD (reset `pkgrel` ke `1`);
-3. build di container `archlinux:base-devel` sebagai user non-root, memasang CLI
-   beserta dependency-nya ke `/usr/lib/node_modules`;
+1. cek rilis terbaru upstream lewat GitHub API;
+2. kalau versinya berubah, perbarui `pkgver`, `source`, dan `sha256sums` di `PKGBUILD`;
+3. build di container `archlinux:base-devel` sebagai user non-root;
 4. buat database pacman dengan `repo-add`;
 5. ubah symlink `.db` dan `.files` jadi file biasa (GitHub Releases tidak menyimpan symlink);
-6. upload paket + database ke **satu tag tetap bernama `repo`**.
+6. upload paket + database ke **satu tag tetap bernama `repo`**;
+7. commit `PKGBUILD` ke branch `main`.
 
 Karena tag-nya tetap, URL di `pacman.conf` tidak pernah berubah.
 
@@ -31,23 +30,24 @@ SigLevel = Optional TrustAll
 Server = https://github.com/adttsonaisse/deepseek-harness-repo/releases/download/repo
 ```
 
-`SigLevel = Optional TrustAll` diperlukan karena paket dan database di repo ini
+`SigLevel = Optional TrustAll` diperlukan karena database dan paket di repo ini
 tidak ditandatangani kunci PGP. Hanya pakai kalau kamu percaya pada repo ini.
 
 ### 2. Sinkronkan dan pasang
 
 ```bash
-sudo pacman -Syu deepseek-harness-bin
+sudo pacman -Syu deepseek-harness-desktop-bin
 ```
 
-### 3. Pakai
+### 3. Jalankan
 
 ```bash
-dsh web
+deepseek-harness-desktop
 ```
 
-Perintah itu menyalakan Web UI di `http://127.0.0.1:3080`. Tambahkan `--no-open`
-kalau tidak mau browser terbuka otomatis.
+Atau lewat menu aplikasi (namanya **DSH Tauri**).
+
+Paket ini hanya untuk `x86_64` / `amd64`, mengikuti asset `.deb` upstream.
 
 ## Update
 
@@ -57,18 +57,8 @@ Cukup:
 sudo pacman -Syu
 ```
 
-Kalau cron GitHub telat (hal yang wajar pada repo publik), buka tab **Actions**
-repo ini dan klik **Run workflow**, lalu jalankan `sudo pacman -Syu` lagi.
-
-## Catatan versi
-
-Versi npm seperti `0.2.2-rc.5` tidak sah sebagai `pkgver` Arch (hyphen dilarang),
-jadi disimpan sebagai `0.2.2.rc5`. PKGBUILD mengubahnya kembali ke bentuk npm
-saat mengunduh tarball. Untuk versi `alpha`/`beta` polanya sama:
-`0.2.3-alpha.2` → `0.2.3.alpha2` → `0.2.3-alpha.2`.
-
-Workflow mengikuti dist-tag **`latest`**, bukan `alpha`. Dist-tag `alpha`
-mungkin lebih baru tetapi belum menjadi versi default `npx`.
+Kalau cron GitHub telat (wajar pada repo publik), buka tab **Actions** dan klik
+**Run workflow**, lalu jalankan `sudo pacman -Syu` lagi.
 
 ## Isi release `repo`
 
@@ -78,11 +68,11 @@ mungkin lebih baru tetapi belum menjadi versi default `npx`.
 | `deepseek-harness-repo.db.tar.gz` | database yang dipakai pacman |
 | `deepseek-harness-repo.files` | indeks daftar file paket |
 | `deepseek-harness-repo.files.tar.gz` | versi terkompresi indeks tersebut |
-| `deepseek-harness-bin-<versi>-<rel>-any.pkg.tar.zst` | paketnya sendiri |
+| `deepseek-harness-desktop-bin-<versi>-1-x86_64.pkg.tar.zst` | paketnya sendiri |
 
-`arch=('any')` karena paket ini membawa prebuild native untuk Linux x86_64
-dan aarch64 sekaligus, sehingga bisa dipakai di keduanya. Dependency native
-hanya memakai `glibc`/`gcc-libs` yang sudah termasuk base Arch.
+File `.db` dan `.files` sengaja disalin dari `*.tar.gz` menjadi file biasa.
+`repo-add` awalnya membuat keduanya sebagai symlink, tetapi GitHub Releases
+mengabaikan symlink saat upload.
 
 ## Build manual (opsional)
 
@@ -92,7 +82,11 @@ cd deepseek-harness-repo
 makepkg -si
 ```
 
-Butuh `base-devel`, `nodejs` (>= 24.9.0), dan `npm`. `makepkg` tidak boleh
-dijalankan sebagai root.
+Butuh `base-devel` dan `bsdtar` (sudah termasuk di `base`). `makepkg` tidak
+boleh dijalankan sebagai root.
 
-Ini adalah pengemasan pihak ketiga, bukan rilis resmi DeepSeek.
+Catatan: paket ini meng-`conflicts` dengan `deepseek-harness-desktop` dari AUR
+karena memiliki path file yang sama. Lepaskan versi AUR dulu sebelum memasang
+paket dari repo ini.
+
+Ini adalah repack pihak ketiga, bukan rilis resmi DeepSeek.

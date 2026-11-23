@@ -1,33 +1,50 @@
 # Maintainer: adttsonaisse <adttsonaisse@users.noreply.github.com>
-# Paket dari tarball npm resmi @deepseek-ai/dsh (repo ini tidak merilis .deb).
+# Repack dari .deb resmi dsh-tauri/deepseek-harness-desktop. Tanpa debtap.
 
-pkgname=deepseek-harness-bin
-pkgver=0.2.2.rc5
+pkgname=deepseek-harness-desktop-bin
+pkgver=0.33.0
 pkgrel=1
-pkgdesc='DeepSeek Harness (dsh): everything-is-a-plugin agent harness CLI'
-arch=('any')
-url='https://github.com/deepseek-ai/deepseek-harness'
+pkgdesc='DeepSeek Harness desktop application (repack dari .deb resmi)'
+arch=('x86_64')
+url='https://github.com/dsh-tauri/deepseek-harness-desktop'
 license=('MIT')
-depends=('nodejs>=24.9.0')
-makedepends=('npm')
-options=('!strip')
+depends=(
+  'gtk3'
+  'webkit2gtk-4.1'
+  'libappindicator'
+  'systemd-libs'
+  'zenity'
+  'openssl'
+)
+conflicts=('deepseek-harness-desktop')
+options=('!strip' '!debug')
+noextract=("Deepseek.Harness.Desktop-${pkgver}_amd64.deb")
+source=("Deepseek.Harness.Desktop-${pkgver}_amd64.deb::https://github.com/dsh-tauri/deepseek-harness-desktop/releases/download/v${pkgver}/Deepseek.Harness.Desktop_${pkgver}_amd64.deb")
+sha256sums=('afb6ac95c77eef8b3830a53f32ee83e77002a105d8c3ec6aea543552b5437e66')
 
-# pkgver Arch tidak boleh memakai '-', jadi versi npm disimpan sebagai
-# 0.2.2.rc5 dan dikembalikan ke 0.2.2-rc.5 di sini.
-_npmver=$(printf '%s' "$pkgver" | sed -E 's/\.(alpha|beta|rc)([0-9]+)$/-\1.\2/')
+_deb="Deepseek.Harness.Desktop-${pkgver}_amd64.deb"
 
-source=("dsh-${_npmver}.tgz::https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.2.2-rc.5.tgz")
-sha256sums=('67da5a3c458f46cd278e0eec6ad0e3a44e99fd13087c6f11a1b362268900a52c')
+prepare() {
+  cd "$srcdir"
+
+  # File .deb adalah arsip ar: keluarkan control.tar.* dan data.tar.*
+  bsdtar -xf "$_deb"
+}
 
 package() {
   cd "$srcdir"
 
-  # Pasang CLI + semua dependency npm-nya ke prefix /usr. Bin /usr/bin/dsh
-  # dibuat npm sebagai symlink relatif ke lib/node_modules.
-  npm install --global --prefix "$pkgdir/usr" \
-    --cache "$srcdir/.npm-cache" \
-    --ignore-scripts \
-    "$srcdir/dsh-${_npmver}.tgz"
+  if ! compgen -G 'data.tar.*' > /dev/null; then
+    echo 'data.tar.* tidak ditemukan setelah ekstraksi .deb' >&2
+    return 1
+  fi
 
-  chmod 755 "$pkgdir/usr/bin/dsh"
+  bsdtar -xf data.tar.* -C "$pkgdir"
+
+  # Direktori 755, file yang memang executable di .deb tetap executable.
+  find "$pkgdir" -type d -exec chmod 755 {} +
+  find "$pkgdir" -type f -perm /111 -exec chmod a+x {} +
+
+  # File .desktop dan aset gambar tidak boleh executable.
+  find "$pkgdir" -type f \( -name '*.desktop' -o -name '*.png' -o -name '*.svg' -o -name '*.json' \) -exec chmod 644 {} +
 }
