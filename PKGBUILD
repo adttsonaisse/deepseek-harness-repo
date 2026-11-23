@@ -19,7 +19,7 @@ depends=(
 conflicts=('deepseek-harness-desktop')
 options=('!strip' '!debug')
 noextract=("Deepseek.Harness.Desktop-${pkgver}_amd64.deb")
-source=("Deepseek.Harness.Desktop-${pkgver}_amd64.deb::https://github.com/dsh-tauri/deepseek-harness-desktop/releases/download/v${pkgver}/Deepseek.Harness.Desktop_${pkgver}_amd64.deb")
+source=("Deepseek.Harness.Desktop-0.33.0_amd64.deb::https://github.com/dsh-tauri/deepseek-harness-desktop/releases/download/v0.33.0/Deepseek.Harness.Desktop_0.33.0_amd64.deb")
 sha256sums=('afb6ac95c77eef8b3830a53f32ee83e77002a105d8c3ec6aea543552b5437e66')
 
 _deb="Deepseek.Harness.Desktop-${pkgver}_amd64.deb"
