@@ -16,7 +16,7 @@ options=('!strip')
 # 0.2.2.rc5 dan dikembalikan ke 0.2.2-rc.5 di sini.
 _npmver=$(printf '%s' "$pkgver" | sed -E 's/\.(alpha|beta|rc)([0-9]+)$/-\1.\2/')
 
-source=("dsh-${_npmver}.tgz::https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-${_npmver}.tgz")
+source=("dsh-${_npmver}.tgz::https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.2.2-rc.5.tgz")
 sha256sums=('67da5a3c458f46cd278e0eec6ad0e3a44e99fd13087c6f11a1b362268900a52c')
 
 package() {
