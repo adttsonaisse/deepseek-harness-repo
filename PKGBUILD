@@ -2,7 +2,7 @@
 # Repack dari .deb resmi dsh-tauri/deepseek-harness-desktop. Tanpa debtap.
 
 pkgname=deepseek-harness-desktop-bin
-pkgver=0.33.0
+pkgver=0.34.0
 pkgrel=1
 pkgdesc='DeepSeek Harness desktop application (repack dari .deb resmi)'
 arch=('x86_64')
@@ -19,8 +19,8 @@ depends=(
 conflicts=('deepseek-harness-desktop')
 options=('!strip' '!debug')
 noextract=("Deepseek.Harness.Desktop-${pkgver}_amd64.deb")
-source=("Deepseek.Harness.Desktop-0.33.0_amd64.deb::https://github.com/dsh-tauri/deepseek-harness-desktop/releases/download/v0.33.0/Deepseek.Harness.Desktop_0.33.0_amd64.deb")
-sha256sums=('afb6ac95c77eef8b3830a53f32ee83e77002a105d8c3ec6aea543552b5437e66')
+source=("Deepseek.Harness.Desktop-0.34.0_amd64.deb::https://github.com/dsh-tauri/deepseek-harness-desktop/releases/download/v0.34.0/Deepseek.Harness.Desktop_0.34.0_amd64.deb")
+sha256sums=('ccffe901afbe08d9da5029823c697a7d715cd4d29041b5798f9a55dde617d059')
 
 _deb="Deepseek.Harness.Desktop-${pkgver}_amd64.deb"
 
